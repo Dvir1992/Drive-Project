@@ -1,0 +1,38 @@
+This text explains the flow in the attached architecture file.
+
+**NBD** – A component that operates within the kernel and receives the WRITE/READ requests from the concrete file system instead of the driver, and then transfers them back to USER SPACE via a TCP message. We don’t stay in the kernel because
+          it's much more complicated and error-prone. 
+
+**Reactor** - A design pattern which listens for incoming TCP messages from the NBD and calls the appropriate response (callback) generically. The generics are achieved by decoupling (separation) between the callback and the file descriptor.
+              It is implemented by mapping between the two before starting the listening process. 
+
+**InputMediator** – A component whose role is to receive arguments (offset, size, data) from the NBDProxy, which knows how to communicate intimately with the NBD, and send a task to the ThreadPool with the appropriate command and arguments.  
+                    This saves the concrete part from having to call the ThreadPool. 
+
+**ThreadPool** - A design pattern which manages threads and saves us the overhead of opening and closing threads (performance, resources). It provides a thread for each task and runs it. This is where parallelism starts. (Although the NBD
+                 does not support sending another command until the previous one has finished, the framework supports this.) 
+
+**Factory** - A design pattern which dynamically maps between a key and the creator of different objects. 
+
+### What happens when the task is executed: 
+
+1. A key is received from the arguments, and the Factory is called to create the appropriate command for execution (R/W). 
+
+2. The command is executed with the appropriate arguments as follows: 
+
+    - A request is made to the RaidManager. This component holds all the minion proxies that the software on the user side communicates with (components that know how to communicate intimately with the minions). 
+      It receives the offset where the user wants to read/write to the drive and returns the appropriate minion proxy with the offset in it. 
+
+    - The Response Manager is updated (which maps between the command ID and the success of the command) with the new command IDs (regular command + backup command). 
+
+    - A request is made to the same minion proxy, and a r/w request (depending on the command the Factory created) is sent to the minion through a UDP message. 
+
+3. Async Injection Activation – A component that ensures a function sampling the Response Manager is executed immediately after sending the UDP message. If after a defined number of retries 
+                                 the command hasn’t succeeded, the Async injection will respond based on the function defined for it 
+                                 (e.g., it could ask to execute the command again by creating a new task in the ThreadPool). 
+###
+
+* The minion receives the request and writes or reads from the disk storage according to the appropriate offset. The minion returns a response in a UDP message to the Response Proxy. 
+
+**Response Proxy** – Receives the UDP message, updates the Response Manager that the command succeeded, and passes the received information from the minion message to the NBDProxy. 
+                    The NBDProxy passes the content to the NBD. The latter ensures that the information is returned to the user’s GUI.
